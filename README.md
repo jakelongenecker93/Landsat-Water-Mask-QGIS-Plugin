@@ -7,15 +7,15 @@ Adds a Processing Toolbox algorithm:
 Acceptable file inputs can be sourced from Earth Explorer.
 
 1. Landsat Collection 2 Level-2
-	⇒Landsat 8-9 OLI/TIRS C2 L2
-	⇒Landsat 7 ETM+ C2 L2
-	⇒Landsat 4-5 TM C2L2
+	⇒ Landsat 8-9 OLI/TIRS C2 L2
+	⇒ Landsat 7 ETM+ C2 L2
+	⇒ Landsat 4-5 TM C2L2
 		↪QA_PIXEL.TIF
 
 2. Landsat Collection 2 Level-1
-	⇒Landsat 8-9 OLI/TIRS C2 L1
-	⇒Landsat 7 ETM+ C2 L1
-	⇒Landsat 4-5 TM C2L1
+	⇒ Landsat 8-9 OLI/TIRS C2 L1
+	⇒ Landsat 7 ETM+ C2 L1
+	⇒ Landsat 4-5 TM C2L1
 		↪Full Resolution Browse (Reflective Color) GeoTIFF
 
 refl.tif note:
