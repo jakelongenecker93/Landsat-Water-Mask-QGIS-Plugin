@@ -23,8 +23,8 @@ refl.tif note:
 
 QA_PIXEL.tif note:
   Water is detected using the QA_PIXEL integer value per Landsat generation #:
-    - Landsat 4/5/7: 5504
-    - Landsat 8/9:   21952
+   ⇒ Landsat 4/5/7 (5504)
+   ⇒ Landsat 8/9 (21952)
   
 Landsat generation # detected from filename characters 3–4 (04, 05, 07, 08, 09)
 
