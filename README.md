@@ -25,7 +25,8 @@ QA_PIXEL.tif note:
   Water is detected using the QA_PIXEL integer value chosen per Landsat generation:
     - Landsat 4/5/7: 5504
     - Landsat 8/9:   21952
-  (Detected from filename characters 3–4: 04, 05, 07, 08, 09.)
+  
+Landsat sensor detected from filename characters 3–4 (04, 05, 07, 08, 09)
 
 Outputs are Processing destinations (TEMPORARY_OUTPUT by default) and will be added back into QGIS.
 
