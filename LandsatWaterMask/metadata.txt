@@ -2,12 +2,12 @@
 
 name=Landsat Water Mask
 
-qgisMinimumVersion=3.34
-qgisMaximumVersion=3.99
+qgisMinimumVersion=3.40.13
+qgisMaximumVersion=3.99.0
 
 description=Build water masks and polygons from Landsat 4-5-7-8-9 Reflectance and/or QA_PIXEL
 
-version=1.4
+version=1.4.1
 
 license=GNU
 
@@ -17,6 +17,8 @@ email=jakelongenecker93@gmail.com
 homepage=https://github.com/jakelongenecker93/Landsat-Water-Mask-QGIS-Plugin
 tracker=https://github.com/jakelongenecker93/Landsat-Water-Mask-QGIS-Plugin
 repository=https://github.com/jakelongenecker93/Landsat-Water-Mask-QGIS-Plugin
+
+changelog=1.4.1 Initial Release
 
 tags="Landsat","Landsat 4","Landsat 5","Landsat 7","Landsat 8","Landsat 9","USGS","Satellite imagery","Remote sensing","Raster","Raster analysis","Raster processing","Raster conversion","QA_PIXEL","Pixel QA","Water mask","Water classification","Land water classification","Surface reflectance","Geospatial","GIS","QGIS plugin","Processing toolbox","Polygonize","Vectorization","Shapefile","GeoPackage","Reprojection","EPSG:4326"
 
