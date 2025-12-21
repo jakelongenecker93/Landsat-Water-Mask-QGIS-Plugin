@@ -9,8 +9,6 @@ description=Build water masks and polygons from Landsat 4-5-7-8-9 Reflectance an
 
 version=1.4.1
 
-license=GNU
-
 author=Jake Longenecker
 email=jakelongenecker93@gmail.com
 
