@@ -591,7 +591,7 @@ class LandsatWaterMaskAlgorithm(QgsProcessingAlgorithm):
         return "landsat_water_mask"
 
     def displayName(self):
-        return "Landsat water mask (from loaded layers)"
+        return "Landsat Water Mask (from loaded layers)"
 
     def group(self):
         return "Landsat Water Mask"
@@ -602,13 +602,15 @@ class LandsatWaterMaskAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         return (
             "Builds water binary masks (1=water, 0=not water) and dissolved water polygons from Landsat rasters.\n\n"
-            "Inputs come from raster layers currently loaded in the QGIS project (or a selected subset).\n"
+            "Acceptable file inputs can be sourced from Earth Explorer.\n"
+            "1. Landsat Collection 2 Level-2 ⇒ Landsat 8-9 OLI/TIRS C2 L2 ⇒ Landsat 7 ETM+ C2 L2 ⇒ Landsat 4-5 TM C2L2 ↪ QA_PIXEL.TIF\n"
+            "2. Landsat Collection 2 Level-1 ⇒ Landsat 8-9 OLI/TIRS C2 L1 ⇒ Landsat 7 ETM+ C2 L1 ⇒ Landsat 4-5 TM C2L1 ↪ Full Resolution Browse (Reflective Color) GeoTIFF\n"
             "REFL: unions water from one/more *_refl.tif using inclusive RGB ranges (R,G,B).\n"
-            "PIXEL: unions water using QA_PIXEL equality, with the water value chosen per Landsat generation:\n"
-            "  • Landsat 4/5/7: water == 5504\n"
-            "  • Landsat 8/9:   water == 21952\n"
-            "  (Detected from filename characters 3–4: 04, 05, 07, 08, 09.)\n"
-            "BOTH: runs both and can optionally write a water_sum raster and polygons.\n\n"
+            "PIXEL: unions water using QA_PIXEL equality, with the water value chosen per Landsat generation.\n"
+            "Landsat generation # detected from filename characters 3 – 4 (04, 05, 07, 08, 09):\n"
+            "• Landsat 4/5/7: water == 5504\n"
+            "• Landsat 8/9:   water == 21952\n"
+            "BOTH: runs both file types and can optionally write a water_sum raster and polygons.\n\n"
             "Outputs are Processing destinations (TEMPORARY_OUTPUT by default) and will be added back into QGIS."
         )
 
@@ -784,4 +786,3 @@ class LandsatWaterMaskAlgorithm(QgsProcessingAlgorithm):
         results[self.OUT_LOG] = "\n".join(log_lines)
         feedback.setProgress(100)
         return results
-
