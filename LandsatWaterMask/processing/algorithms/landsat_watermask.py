@@ -611,7 +611,7 @@ class LandsatWaterMaskAlgorithm(QgsProcessingAlgorithm):
             "• Landsat 4/5/7: water == 5504\n"
             "• Landsat 8/9:   water == 21952\n"
             "BOTH: runs both file types and can optionally write a water_sum raster and polygons.\n\n"
-            "Outputs are Processing destinations (TEMPORARY_OUTPUT by default) and will be added back into QGIS."
+            "Outputs are Processing destinations (TEMPORARY_OUTPUT by default) and will be added back into QGIS.\n"
             "Important! All files must have the same path/row. I.e. LC09_L2SP_022039_20251211_20251212_02_T1: Path = 022, Row = 039"
         )
 
