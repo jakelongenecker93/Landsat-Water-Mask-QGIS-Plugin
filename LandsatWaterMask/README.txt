@@ -4,6 +4,9 @@ Landsat Water Mask (QGIS Plugin)
 Adds a Processing Toolbox algorithm:
   Landsat Water Mask ▶ Landsat water mask (REFL / QA_PIXEL)
 
+A guided, modern dialog (Raster → Conversion → Landsat Water Mask)
+for a clean, beginner-friendly workflow.
+
 Acceptable file inputs can be sourced from Earth Explorer.
 
 1. Landsat Collection 2 Level-2
@@ -29,5 +32,7 @@ QA_PIXEL.tif note:
 
 Outputs are Processing destinations (TEMPORARY_OUTPUT by default) and will be added back into QGIS.
 
-Install:
-  QGIS → Plugins → Manage and Install Plugins… → Install from ZIP
+Install from Plugin Store:
+QGIS → Plugins → Manage and Install Plugins… → Install Plugin
+	Else Install from Zip:
+  	QGIS → Plugins → Manage and Install Plugins… → Install from ZIP
