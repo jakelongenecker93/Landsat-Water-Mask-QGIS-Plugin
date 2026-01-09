@@ -2,12 +2,12 @@
 
 name=Landsat Water Mask
 
-qgisMinimumVersion=3.40.13
+qgisMinimumVersion=3.30.0
 qgisMaximumVersion=3.99.0
 
-description=Build water masks and polygons from Landsat 4-5-7-8-9 Reflectance and/or QA_PIXEL
+description=Build Water/Land masks + polygons from Landsat 4/5/7/8/9 Reflectance and QA PIXEL layers.
 
-version=1.4.1
+version=1.4.2
 
 author=Jake Longenecker
 email=jakelongenecker93@gmail.com
@@ -16,12 +16,11 @@ homepage=https://github.com/jakelongenecker93/Landsat-Water-Mask-QGIS-Plugin
 tracker=https://github.com/jakelongenecker93/Landsat-Water-Mask-QGIS-Plugin
 repository=https://github.com/jakelongenecker93/Landsat-Water-Mask-QGIS-Plugin
 
-changelog=1.4.1 Initial Release
+changelog=1.4.2 Added a clean “guided” dialog with live progress/log popup (run in foreground or background). Added Advanced PIXEL water code overrides for Landsat 4/5/7 vs 8/9. Lowered minimum QGIS requirement to 3.30.0. Refactored processing so classification GeoTIFFs are grouped by unique acquisition date and merged across all Path/Row groups on a matching extent. Added two methods of vector smoothing. Optimized for QT5 LTR.
 
 tags="Landsat","Landsat 4","Landsat 5","Landsat 7","Landsat 8","Landsat 9","USGS","Satellite imagery","Remote sensing","Raster","Raster analysis","Raster processing","Raster conversion","QA_PIXEL","Pixel QA","Water mask","Water classification","Land water classification","Surface reflectance","Geospatial","GIS","QGIS plugin","Processing toolbox","Polygonize","Vectorization","Shapefile","GeoPackage","Reprojection","EPSG:4326"
 
-about=Builds water masks & boundaries from Landsat and outputs classification masks and shapefile results directly back into QGIS.
-
+about=Build per-date water/land rasters & water/land polygons; Optionally smooth outputs; Create change over time via datewise count; Multi Path/Row supported. 
 category=Raster
 
 icon=icon.png
