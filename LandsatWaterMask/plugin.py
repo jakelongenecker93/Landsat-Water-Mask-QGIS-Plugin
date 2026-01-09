@@ -32,7 +32,7 @@ class LandsatWaterMaskPlugin:
         # Toolbar/menu action
         icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
         self.action = QAction(QIcon(icon_path), "Landsat Water Mask", self.iface.mainWindow())
-        self.action.setWhatsThis("Open the Landsat Water Mask Processing dialog")
+        self.action.setWhatsThis("Open the Landsat Water Mask guided dialog")
         self.action.triggered.connect(self.open_dialog)
 
         # Place the action under Raster -> Conversion (requested for Raster tools).
@@ -71,6 +71,25 @@ class LandsatWaterMaskPlugin:
             self.provider = None
 
     def open_dialog(self):
+        """Open a guided (clean) dialog.
+
+        Power users can still open the raw Processing dialog from inside the guided UI.
+        """
+        try:
+            from .gui.dialog import LandsatWaterMaskGuidedDialog
+            dlg = LandsatWaterMaskGuidedDialog(self.iface, parent=self.iface.mainWindow())
+            dlg.exec()
+        except Exception as e:
+            # If the guided dialog fails for any reason, fall back to the Processing dialog
+            try:
+                self._open_processing_dialog(fallback_error=e)
+            except Exception:
+                try:
+                    self.iface.messageBar().pushWarning("Landsat Water Mask", f"Could not open dialog: {e}")
+                except Exception:
+                    pass
+
+    def _open_processing_dialog(self, fallback_error=None):
         """Open the standard Processing algorithm dialog."""
         alg_id = "landsat_watermask:landsat_water_mask"
         try:
@@ -81,8 +100,11 @@ class LandsatWaterMaskPlugin:
                 dlg = processing.createAlgorithmDialog(alg_id, {})
                 dlg.exec()
         except Exception as e:
+            msg = f"Could not open algorithm dialog: {e}"
+            if fallback_error is not None:
+                msg = f"Guided dialog failed ({fallback_error}); {msg}"
             try:
-                self.iface.messageBar().pushWarning("Landsat Water Mask", f"Could not open algorithm dialog: {e}")
+                self.iface.messageBar().pushWarning("Landsat Water Mask", msg)
             except Exception:
                 pass
 
