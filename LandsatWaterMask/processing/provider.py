@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 from qgis.core import QgsProcessingProvider
-from .algorithms.landsat_watermask import LandsatWaterMaskAlgorithm
+from .algorithms.landsat_watermask import SentinelWaterMaskAlgorithm
 
-class LandsatWaterMaskProvider(QgsProcessingProvider):
+class SentinelWaterMaskProvider(QgsProcessingProvider):
     def id(self):
-        return 'landsat_watermask'
+        return 'sentinel_watermask'
 
     def name(self):
-        return 'Landsat Water Mask'
+        return 'Sentinel Water Mask'
 
     def longName(self):
         return self.name()
 
     def loadAlgorithms(self):
-        self.addAlgorithm(LandsatWaterMaskAlgorithm())
+        self.addAlgorithm(SentinelWaterMaskAlgorithm())
