@@ -3,12 +3,12 @@ import os
 
 from qgis.core import QgsApplication
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QMenu
+from qgis.PyQt.QtWidgets import QAction, QMenu, QMessageBox
 
-from .processing.provider import LandsatWaterMaskProvider
+from .processing.provider import SentinelWaterMaskProvider
 
 
-class LandsatWaterMaskPlugin:
+class SentinelWaterMaskPlugin:
     """Qt6-compatible QGIS plugin.
 
     - Registers a Processing provider (appears in the Processing Toolbox)
@@ -26,7 +26,7 @@ class LandsatWaterMaskPlugin:
 
     def initGui(self):
         # Register processing provider
-        self.provider = LandsatWaterMaskProvider()
+        self.provider = SentinelWaterMaskProvider()
         QgsApplication.processingRegistry().addProvider(self.provider)
 
         # Toolbar/menu action
@@ -71,27 +71,24 @@ class LandsatWaterMaskPlugin:
             self.provider = None
 
     def open_dialog(self):
-        """Open a guided (clean) dialog.
-
-        Power users can still open the raw Processing dialog from inside the guided UI.
-        """
+        """Open the guided (clean) dialog."""
+        from .gui.dialog import SentinelWaterMaskGuidedDialog
         try:
-            from .gui.dialog import LandsatWaterMaskGuidedDialog
-            dlg = LandsatWaterMaskGuidedDialog(self.iface, parent=self.iface.mainWindow())
+            dlg = SentinelWaterMaskGuidedDialog(self.iface, parent=self.iface.mainWindow())
             dlg.exec()
         except Exception as e:
-            # If the guided dialog fails for any reason, fall back to the Processing dialog
+            # Do not silently fall back to the legacy Processing dialog.
             try:
-                self._open_processing_dialog(fallback_error=e)
+                QMessageBox.critical(self.iface.mainWindow(), "Landsat Water Mask", f"Could not open the guided dialog:\n\n{e}")
             except Exception:
                 try:
-                    self.iface.messageBar().pushWarning("Landsat Water Mask", f"Could not open dialog: {e}")
+                    self.iface.messageBar().pushCritical("Landsat Water Mask", f"Could not open the guided dialog: {e}")
                 except Exception:
                     pass
 
     def _open_processing_dialog(self, fallback_error=None):
         """Open the standard Processing algorithm dialog."""
-        alg_id = "landsat_watermask:landsat_water_mask"
+        alg_id = "sentinel_watermask:sentinel_water_mask"
         try:
             import processing  # QGIS Processing framework
             if hasattr(processing, "execAlgorithmDialog"):
