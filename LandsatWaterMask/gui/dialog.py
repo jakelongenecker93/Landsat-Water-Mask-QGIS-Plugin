@@ -18,6 +18,14 @@ from pathlib import Path
 from typing import List, Tuple
 
 from qgis.PyQt.QtCore import Qt, QCoreApplication, pyqtSignal
+# ---- Qt5/Qt6 enum compatibility helpers (QGIS 3.34+ uses Qt6) ----
+ALIGN_LEFT = getattr(Qt, "AlignLeft", None) or Qt.AlignmentFlag.AlignLeft
+CHECKED = getattr(Qt, "Checked", None) or Qt.CheckState.Checked
+UNCHECKED = getattr(Qt, "Unchecked", None) or Qt.CheckState.Unchecked
+USER_ROLE = getattr(Qt, "UserRole", None) or Qt.ItemDataRole.UserRole
+ITEM_IS_USER_CHECKABLE = getattr(Qt, "ItemIsUserCheckable", None) or Qt.ItemFlag.ItemIsUserCheckable
+RICH_TEXT = getattr(Qt, "RichText", None) or Qt.TextFormat.RichText
+# -----------------------------------------------------------------
 from qgis.PyQt.QtGui import QFont, QIcon
 from qgis.PyQt.QtWidgets import (
     QDialog,
@@ -40,6 +48,8 @@ from qgis.PyQt.QtWidgets import (
     QFormLayout,
     QScrollArea,
     QApplication,
+    QComboBox,
+    QFileDialog,
 )
 
 from qgis.core import (
@@ -133,7 +143,7 @@ class _GuiFeedback(QgsProcessingFeedback):
         QCoreApplication.processEvents()
 
 
-ALG_ID = "landsat_watermask:landsat_water_mask"
+ALG_ID = "sentinel_watermask:sentinel_water_mask"
 
 
 def _hr() -> QFrame:
@@ -160,6 +170,30 @@ def _is_qapixel_layer(layer: QgsRasterLayer) -> bool:
     name = (layer.name() or "").lower()
     return ("qa_pixel" in src) or ("qa_pixel" in name)
 
+
+def _is_sentinel_fmask_layer(layer: QgsRasterLayer) -> bool:
+    """Return True for HLS S30 Sentinel-2 Fmask rasters (byte categorical)."""
+    try:
+        src = (layer.source() or "").split("|")[0].lower()
+    except Exception:
+        src = ""
+    name = (layer.name() or "").lower()
+    return ("fmask" in src and ("hls.s30" in src or src.endswith(".fmask"))) or (
+        "fmask" in name and "hls.s30" in name
+    )
+
+
+
+
+def _is_opera_dswx_layer(layer: QgsRasterLayer) -> bool:
+    """Return True for OPERA L3 DSWx-HLS BWTR rasters (byte; water==1; nodata==255)."""
+    try:
+        src = (layer.source() or "").split("|")[0].lower()
+    except Exception:
+        src = ""
+    name = (layer.name() or "").lower()
+    # Typical filename starts with OPERA_ and contains DSWx and BWTR
+    return (src.startswith("opera_") and ("dswx" in src) and ("bwtr" in src)) or (name.startswith("opera") and ("dswx" in name) and ("bwtr" in name))
 
 def _extract_pathrow_date_from_name(filename: str) -> Tuple[str, str, str]:
     """Best-effort parse for UX display only.
@@ -211,7 +245,7 @@ class _SignalFeedback(QgsProcessingFeedback):
         self.sigError.emit(str(error))
 
 
-class LandsatWaterMaskGuidedDialog(QDialog):
+class SentinelWaterMaskGuidedDialog(QDialog):
     def __init__(self, iface, parent=None):
         super().__init__(parent)
         self.iface = iface
@@ -248,18 +282,18 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         title.setFont(ft)
 
         subtitle = QLabel(
-            "Build per-date <b>water/land rasters</b> & <b>water/land polygons</b> "
-            "from Landsat Reflectance (REFL) and QA_PIXEL (PIXEL) layers."
+            "Build per-date <b>Water/Land shapefiles</b> from Landsat 4/5/7/8/9 (Reflectance & QA_PIXEL); Sentinel-2 (FMASK); "
+            "and OPERA (BWTR) layers. Water <b>'Occurrence Over Time' raster</b> output. Multi Path/Row supported. See <b>'Quick Start Help'</b> for data directories."
         )
         subtitle.setWordWrap(True)
-        subtitle.setTextFormat(Qt.RichText)
+        subtitle.setTextFormat(RICH_TEXT)
 
         root.addWidget(title)
         root.addWidget(subtitle)
         root.addWidget(_hr())
 
         # --- Inputs ---
-        g_inputs = QGroupBox("1) Inputs")
+        g_inputs = QGroupBox("1) Inputs (choose layers / masks to run)")
         v_in = QVBoxLayout(); v_in.setSpacing(6)
         g_inputs.setLayout(v_in)
 
@@ -298,43 +332,185 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         v_in.addLayout(btn_row)
         v_in.addWidget(self.lbl_detected)
 
+        # --- Mask source selection (#1) ---
+        g_src = QGroupBox("Mask sources")
+        v_src = QVBoxLayout(); v_src.setSpacing(6)
+        g_src.setLayout(v_src)
+
+        self.chk_landsat_refl = QCheckBox("Landsat REFL")
+        self.chk_landsat_pixel = QCheckBox("Landsat QA_PIXEL")
+        self.chk_use_sentinel = QCheckBox("Sentinel HLS S30 FMASK")
+        self.chk_use_opera = QCheckBox("OPERA DSWx-HLS BWTR")
+        for w in (self.chk_landsat_refl, self.chk_landsat_pixel, self.chk_use_sentinel, self.chk_use_opera):
+            w.setChecked(False)
+            w.toggled.connect(self._sync_enabled)
+
+        self.chk_sum_selected = QCheckBox("Create SUM outputs from ALL selected inputs")
+        self.chk_sum_selected.setChecked(False)
+        self.chk_sum_selected.toggled.connect(self._sync_enabled)
+        self.chk_sum_selected.setToolTip("If checked, a SUM water/land count raster + polygons are produced by combining every enabled source.")
+
+        src_hint = QLabel(
+            "The tool will run with <b>any combination</b> of inputs. "
+            "Optional <b>SUM</b> will combine all enabled sources."
+        )
+        src_hint.setWordWrap(True)
+        src_hint.setTextFormat(RICH_TEXT)
+
+        v_src.addWidget(self.chk_landsat_refl)
+        v_src.addWidget(self.chk_landsat_pixel)
+        v_src.addWidget(self.chk_use_sentinel)
+        v_src.addWidget(self.chk_use_opera)
+        v_src.addWidget(self.chk_sum_selected)
+        v_src.addWidget(src_hint)
+
+        v_in.addWidget(g_src)
+
         root.addWidget(g_inputs)
 
-        # --- Mode ---
-        g_mode = QGroupBox("2) Mode")
-        v_m = QVBoxLayout(); v_m.setSpacing(6)
-        g_mode.setLayout(v_m)
+        # --- Run options (#2) ---
+        g_opts = QGroupBox("2) Options")
+        v_opts = QVBoxLayout(); v_opts.setSpacing(6)
+        g_opts.setLayout(v_opts)
 
-        self.rb_refl = QRadioButton("REFL (Reflectance RGB thresholds)")
-        self.rb_pixel = QRadioButton("PIXEL (QA_PIXEL water code)")
-        self.rb_both = QRadioButton("BOTH (REFL + PIXEL; optional SUM outputs)")
-        self.rb_both.setChecked(True)
-
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.addButton(self.rb_refl, 0)
-        self.mode_group.addButton(self.rb_pixel, 1)
-        self.mode_group.addButton(self.rb_both, 2)
-        self.mode_group.buttonToggled.connect(lambda *_: self._sync_enabled())
-
-        self.chk_do_sum = QCheckBox("In BOTH mode, also create SUM outputs (datewise; dissolution of REFL+PIXEL)")
-        self.chk_do_sum.setChecked(True)
-
-        mode_hint = QLabel(
-            "<b>Tip:</b> If you’re new, start with <b>PIXEL</b> (most robust), then add <b>REFL</b> later for refinement."
+        # Sentinel-2 HLS Fmask water categories (only used when FMASK is enabled)
+        self.cmb_sentinel_water_mode = QComboBox()
+        self.cmb_sentinel_water_mode.addItems(["All Water", "Pure Water", "Custom"])
+        self.cmb_sentinel_water_mode.currentIndexChanged.connect(self._sync_enabled)
+        self.cmb_sentinel_water_mode.setToolTip(
+            "'All Water' = 32–63,96–127,160–191,224–254; 'Pure Water' = 32,96,160,224"
         )
-        mode_hint.setWordWrap(True)
-        mode_hint.setTextFormat(Qt.RichText)
 
-        v_m.addWidget(self.rb_refl)
-        v_m.addWidget(self.rb_pixel)
-        v_m.addWidget(self.rb_both)
-        v_m.addWidget(self.chk_do_sum)
-        v_m.addWidget(mode_hint)
+        self.le_sentinel_custom_vals = QLineEdit("32,96,160,224")
+        self.le_sentinel_custom_vals.setPlaceholderText("e.g., 32,96,160,224")
+        self.le_sentinel_custom_vals.setToolTip("Comma-separated 0–255 values (255 is NoData and is always ignored)")
 
-        root.addWidget(g_mode)
+        row = QHBoxLayout(); row.setSpacing(8)
+        row.addWidget(QLabel("FMASK water category"))
+        row.addWidget(self.cmb_sentinel_water_mode)
+        row.addStretch(1)
+        v_opts.addLayout(row)
+
+        row2 = QHBoxLayout(); row2.setSpacing(8)
+        row2.addWidget(QLabel("FMASK custom values"))
+        row2.addWidget(self.le_sentinel_custom_vals)
+        v_opts.addLayout(row2)
+
+
+        # REFL thresholds
+        g_refl = QGroupBox("REFL thresholds")
+        f_refl = QFormLayout(); f_refl.setLabelAlignment(ALIGN_LEFT)
+        g_refl.setLayout(f_refl)
+
+        self.le_bg_rgb = QLineEdit("0,0,0")
+        self.le_bg_rgb.setToolTip("Pixels equal to this RGB triplet are treated as background and excluded.")
+
+        self.chk_default_thresh = QCheckBox("Use default REFL water RGB thresholds")
+        self.chk_default_thresh.setChecked(True)
+        self.chk_default_thresh.toggled.connect(self._sync_enabled)
+
+        # Compact 6-number input for older-QGIS parity
+        self.le_rgb_thresh = QLineEdit("0,60,0,60,11,255")
+        self.le_rgb_thresh.setPlaceholderText("Rmin,Rmax,Gmin,Gmax,Bmin,Bmax")
+        self.le_rgb_thresh.setToolTip("Values within this range are considered water (Rmin,Rmax,Gmin,Gmax,Bmin,Bmax).")
+
+        f_refl.addRow("", self.chk_default_thresh)
+        f_refl.addRow("Background RGB to exclude", self.le_bg_rgb)
+        f_refl.addRow("Custom thresholds", self.le_rgb_thresh)
+        v_opts.addWidget(g_refl)
+
+
+        # PIXEL water code
+        g_pix = QGroupBox("PIXEL water code")
+        f_pix = QFormLayout(); f_pix.setLabelAlignment(ALIGN_LEFT)
+        g_pix.setLayout(f_pix)
+
+        self.chk_default_pixelvals = QCheckBox("Use default PIXEL water values")
+        self.chk_default_pixelvals.setChecked(True)
+        self.chk_default_pixelvals.toggled.connect(self._sync_enabled)
+
+        self.le_pixelvals_457 = QLineEdit("5504")
+        self.le_pixelvals_457.setPlaceholderText("e.g., 5504 or 5504,1234")
+        self.le_pixelvals_457.setToolTip("Number separated by comma (n,n,n,n)")
+
+        self.le_pixelvals_89 = QLineEdit("21952")
+        self.le_pixelvals_89.setPlaceholderText("e.g., 21952 or 21952,1234")
+        self.le_pixelvals_89.setToolTip("Number separated by comma (n,n,n,n)")
+
+        note_pix = QLabel("Note: Customize with caution. See Landsat docs for meanings of input variables.")
+        note_pix.setWordWrap(True)
+
+        f_pix.addRow("", self.chk_default_pixelvals)
+        f_pix.addRow("Landsat 4/5/7", self.le_pixelvals_457)
+        f_pix.addRow("Landsat 8/9", self.le_pixelvals_89)
+        f_pix.addRow("", note_pix)
+        v_opts.addWidget(g_pix)
+
+
+        opt_hint = QLabel(
+            "BWTR is treated as <b>water=1</b> and <b>NoData=255</b>. "
+            "When enabled sources don’t align, they are merged using <b>nearest-neighbor</b>."
+        )
+        opt_hint.setWordWrap(True)
+        opt_hint.setTextFormat(RICH_TEXT)
+        v_opts.addWidget(opt_hint)
+
+        root.addWidget(g_opts)
+
+# --- Segmentation (optional) ---
+        g_seg = QGroupBox("3) Segmentation (optional)")
+        v_seg = QVBoxLayout(); v_seg.setSpacing(6)
+        g_seg.setLayout(v_seg)
+
+        self.le_seg_months = QLineEdit("")
+        self.le_seg_months.setPlaceholderText("e.g., Jan-Mar;Oct-Dec  |  1-3;10-12  |  Nov-Feb")
+        self.le_seg_months.setToolTip(
+            "Optional. Semicolon-separated month ranges. Accepts month names or numbers.\n"
+            "Examples: 'Jan-Mar;Oct-Dec', '1-3;10-12', 'Nov-Feb' (wrap range)."
+        )
+        self.le_seg_months.textChanged.connect(self._sync_enabled)
+
+        self.le_seg_years = QLineEdit("")
+        self.le_seg_years.setPlaceholderText("e.g., 1985-1989;2010-2020")
+        self.le_seg_years.setToolTip(
+            "Optional. Semicolon-separated year ranges.\n"
+            "Examples: '1985-1989;2010-2020' or '2015;2022-2024'."
+        )
+        self.le_seg_years.textChanged.connect(self._sync_enabled)
+
+        self.le_seg_outdir = QLineEdit("")
+        self.le_seg_outdir.setPlaceholderText("Choose an output folder to persist multiple outputs")
+        self.le_seg_outdir.setToolTip(
+            "When segmentation is enabled, an output folder is required so each segment writes distinct files to disk."
+        )
+
+        self.btn_seg_browse = QPushButton("Browse…")
+        self.btn_seg_browse.clicked.connect(self._browse_seg_outdir)
+
+        seg_form = QFormLayout(); seg_form.setLabelAlignment(ALIGN_LEFT)
+        seg_form.addRow("Month ranges", self.le_seg_months)
+        seg_form.addRow("Year ranges", self.le_seg_years)
+
+        outrow = QHBoxLayout(); outrow.setSpacing(8)
+        outrow.addWidget(self.le_seg_outdir, 1)
+        outrow.addWidget(self.btn_seg_browse)
+        outwrap = QWidget(); outwrap.setLayout(outrow)
+        seg_form.addRow("Output folder", outwrap)
+
+        seg_hint = QLabel(
+            "If you provide <b>month</b> and/or <b>year</b> ranges, the tool runs once per combination (cartesian product).<br>"
+            "Example: months 'Jan-Mar;Oct-Dec' and years '1985-1989;2010-2020' → <b>4 outputs</b>."
+        )
+        seg_hint.setWordWrap(True)
+        seg_hint.setTextFormat(RICH_TEXT)
+
+        v_seg.addLayout(seg_form)
+        v_seg.addWidget(seg_hint)
+
+        root.addWidget(g_seg)
 
         # --- Outputs ---
-        g_out = QGroupBox("3) Outputs")
+        g_out = QGroupBox("4) Outputs")
         v_o = QVBoxLayout(); v_o.setSpacing(6)
         g_out.setLayout(v_o)
 
@@ -359,7 +535,7 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             "or <b>Save As…</b> to write to disk."
         )
         out_hint.setWordWrap(True)
-        out_hint.setTextFormat(Qt.RichText)
+        out_hint.setTextFormat(RICH_TEXT)
 
         v_o.addWidget(self.rb_vec_water)
         v_o.addWidget(self.rb_vec_land)
@@ -384,57 +560,9 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         adv_body.setVisible(False)
         g_adv.toggled.connect(adv_body.setVisible)
 
-        # REFL thresholds
-        g_refl = QGroupBox("REFL thresholds")
-        f_refl = QFormLayout(); f_refl.setLabelAlignment(Qt.AlignLeft)
-        g_refl.setLayout(f_refl)
-
-        self.le_bg_rgb = QLineEdit("0,0,0")
-        self.le_bg_rgb.setToolTip("Pixels equal to this RGB triplet are treated as background and excluded.")
-
-        self.chk_default_thresh = QCheckBox("Use default REFL water RGB thresholds")
-        self.chk_default_thresh.setChecked(True)
-        self.chk_default_thresh.toggled.connect(self._sync_enabled)
-
-        # Compact 6-number input for older-QGIS parity
-        self.le_rgb_thresh = QLineEdit("0,60,0,60,11,255")
-        self.le_rgb_thresh.setPlaceholderText("Rmin,Rmax,Gmin,Gmax,Bmin,Bmax")
-        self.le_rgb_thresh.setToolTip("Values within this range are considered water (Rmin,Rmax,Gmin,Gmax,Bmin,Bmax).")
-
-        f_refl.addRow("Background RGB to exclude", self.le_bg_rgb)
-        f_refl.addRow("", self.chk_default_thresh)
-        f_refl.addRow("Custom thresholds", self.le_rgb_thresh)
-        v_adv.addWidget(g_refl)
-
-        # PIXEL water code
-        g_pix = QGroupBox("PIXEL water code")
-        f_pix = QFormLayout(); f_pix.setLabelAlignment(Qt.AlignLeft)
-        g_pix.setLayout(f_pix)
-
-        self.chk_default_pixelvals = QCheckBox("Use default PIXEL water values")
-        self.chk_default_pixelvals.setChecked(True)
-        self.chk_default_pixelvals.toggled.connect(self._sync_enabled)
-
-        self.le_pixelvals_457 = QLineEdit("5504")
-        self.le_pixelvals_457.setPlaceholderText("e.g., 5504 or 5504,1234")
-        self.le_pixelvals_457.setToolTip("Number separated by comma (n,n,n,n)")
-
-        self.le_pixelvals_89 = QLineEdit("21952")
-        self.le_pixelvals_89.setPlaceholderText("e.g., 21952 or 21952,1234")
-        self.le_pixelvals_89.setToolTip("Number separated by comma (n,n,n,n)")
-
-        note_pix = QLabel("Note: Customize with caution. See Landsat docs for meanings of input variables.")
-        note_pix.setWordWrap(True)
-
-        f_pix.addRow("", self.chk_default_pixelvals)
-        f_pix.addRow("Landsat 4/5/7", self.le_pixelvals_457)
-        f_pix.addRow("Landsat 8/9", self.le_pixelvals_89)
-        f_pix.addRow("", note_pix)
-        v_adv.addWidget(g_pix)
-
         # Smoothing
         g_sm = QGroupBox("Smoothing")
-        f_sm = QFormLayout(); f_sm.setLabelAlignment(Qt.AlignLeft)
+        f_sm = QFormLayout(); f_sm.setLabelAlignment(ALIGN_LEFT)
         g_sm.setLayout(f_sm)
 
         # Fast pixel-based smoothing (majority filter before polygonizing)
@@ -569,9 +697,9 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         rasters = [lyr for lyr in QgsProject.instance().mapLayers().values() if isinstance(lyr, QgsRasterLayer)]
         for lyr in sorted(rasters, key=lambda l: (l.name() or "")):
             item = QListWidgetItem(lyr.name() or "(unnamed raster)")
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked)
-            item.setData(Qt.UserRole, lyr.id())
+            item.setFlags(item.flags() | ITEM_IS_USER_CHECKABLE)
+            item.setCheckState(CHECKED)
+            item.setData(USER_ROLE, lyr.id())
 
             # A short, helpful hint in the item tooltip
             try:
@@ -584,6 +712,10 @@ class LandsatWaterMaskGuidedDialog(QDialog):
                 tags.append("REFL")
             if _is_qapixel_layer(lyr):
                 tags.append("QA_PIXEL")
+            if _is_sentinel_fmask_layer(lyr):
+                tags.append("FMASK")
+            if _is_opera_dswx_layer(lyr):
+                tags.append("BWTR")
             tag_s = (" / ".join(tags) + " — ") if tags else ""
             item.setToolTip(f"{tag_s}PR={pr_p}/{pr_r}, DATE={dt}\n{src}")
             self.layer_list.addItem(item)
@@ -593,7 +725,7 @@ class LandsatWaterMaskGuidedDialog(QDialog):
 
     def _set_all_checks(self, checked: bool):
         for i in range(self.layer_list.count()):
-            self.layer_list.item(i).setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            self.layer_list.item(i).setCheckState(CHECKED if checked else UNCHECKED)
         self._sync_enabled()
 
     def _selected_layers(self) -> List[QgsRasterLayer]:
@@ -604,8 +736,8 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         wanted_ids = []
         for i in range(self.layer_list.count()):
             it = self.layer_list.item(i)
-            if it.checkState() == Qt.Checked:
-                wanted_ids.append(it.data(Qt.UserRole))
+            if it.checkState() == CHECKED:
+                wanted_ids.append(it.data(USER_ROLE))
 
         layers = []
         for lid in wanted_ids:
@@ -624,7 +756,19 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         return self._selected_layers()
 
     def _mode_idx(self) -> int:
-        return self.mode_group.checkedId()
+        r = bool(getattr(self, "chk_landsat_refl", None) and self.chk_landsat_refl.isChecked())
+        p = bool(getattr(self, "chk_landsat_pixel", None) and self.chk_landsat_pixel.isChecked())
+        s = bool(getattr(self, "chk_use_sentinel", None) and self.chk_use_sentinel.isChecked())
+        o = bool(getattr(self, "chk_use_opera", None) and self.chk_use_opera.isChecked())
+
+        # BOTH means: any REFL + any pixel-like source (QA_PIXEL and/or FMASK and/or BWTR)
+        if r and (p or s or o):
+            return 2
+        if r:
+            return 0
+        if p or s or o:
+            return 1
+        return -1
 
     def _vec_idx(self) -> int:
         return self.vec_group.checkedId()
@@ -633,11 +777,13 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         layers = self._current_input_layers()
         n_refl = sum(1 for l in layers if _is_refl_layer(l))
         n_qp = sum(1 for l in layers if _is_qapixel_layer(l))
+        n_sen = sum(1 for l in layers if _is_sentinel_fmask_layer(l))
+        n_op = sum(1 for l in layers if _is_opera_dswx_layer(l))
         total = len(layers)
         self.lbl_detected.setText(
-            f"Detected: <b>{total}</b> raster(s) — <b>{n_refl}</b> REFL, <b>{n_qp}</b> QA_PIXEL."
+            f"Detected: <b>{total}</b> raster(s) — <b>{n_refl}</b> REFL, <b>{n_qp}</b> QA_PIXEL, <b>{n_sen}</b> Sentinel Fmask, <b>{n_op}</b> OPERA BWTR."
         )
-        self.lbl_detected.setTextFormat(Qt.RichText)
+        self.lbl_detected.setTextFormat(RICH_TEXT)
 
     def _on_pixsmooth_toggled(self, checked: bool):
         # Pixel smoothing and Smoothify are mutually exclusive
@@ -655,6 +801,17 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             self.chk_pixsmooth.blockSignals(False)
         self._sync_enabled()
 
+    def _browse_seg_outdir(self):
+        """Choose an output folder for segmented runs."""
+        try:
+            start_dir = self.le_seg_outdir.text().strip() or str(Path.home())
+        except Exception:
+            start_dir = ""
+        d = QFileDialog.getExistingDirectory(self, "Choose output folder", start_dir)
+        if d:
+            self.le_seg_outdir.setText(d)
+            self._sync_enabled()
+
     def _sync_enabled(self):
         # Smoothing options are mutually exclusive (either/or)
         pix = self.chk_pixsmooth.isChecked()
@@ -668,66 +825,84 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         self.btn_select_all.setEnabled(not use_all)
         self.btn_select_none.setEnabled(not use_all)
 
-        # Enable/disable mode choices based on what is actually available.
+        # Enable/disable Landsat choices based on what is actually available.
         layers = self._current_input_layers()
         has_any = len(layers) > 0
         has_refl_layers = any(_is_refl_layer(l) for l in layers)
         has_qapixel_layers = any(_is_qapixel_layer(l) for l in layers)
+        has_sentinel_layers = any(_is_sentinel_fmask_layer(l) for l in layers)
+        has_opera_layers = any(_is_opera_dswx_layer(l) for l in layers)
 
-        self.rb_refl.setEnabled(has_refl_layers)
-        self.rb_pixel.setEnabled(has_qapixel_layers)
-        self.rb_both.setEnabled(has_refl_layers and has_qapixel_layers)
+        self.chk_landsat_refl.setEnabled(has_refl_layers)
+        self.chk_landsat_pixel.setEnabled(has_qapixel_layers)
+        self.chk_use_sentinel.setEnabled(has_sentinel_layers)
+        self.chk_use_opera.setEnabled(has_opera_layers)
 
-        # Helpful tooltips when disabled
-        self.rb_refl.setToolTip("" if has_refl_layers else "Needs REFL rasters (filename/layer name contains '_refl').")
-        self.rb_pixel.setToolTip("" if has_qapixel_layers else "Needs QA_PIXEL rasters (filename/layer name contains 'QA_PIXEL').")
-        self.rb_both.setToolTip("" if (has_refl_layers and has_qapixel_layers) else "Needs both REFL and QA_PIXEL rasters loaded/selected.")
+        self.chk_landsat_refl.setToolTip("" if has_refl_layers else "Needs REFL rasters (filename/layer name contains '_refl').")
+        self.chk_landsat_pixel.setToolTip("" if has_qapixel_layers else "Needs QA_PIXEL rasters (filename/layer name contains 'QA_PIXEL').")
+        self.chk_use_sentinel.setToolTip("" if has_sentinel_layers else "Needs Sentinel HLS S30 Fmask rasters (e.g., HLS.S30...Fmask).")
+        self.chk_use_opera.setToolTip("" if has_opera_layers else "Needs OPERA DSWx-HLS BWTR rasters (e.g., OPERA_L3_DSWx-HLS_..._BWTR.tif).")
 
-        # If the current selection becomes invalid (e.g., BOTH selected but only
-        # PIXEL layers are loaded), automatically switch to a valid mode.
-        cur = self._mode_idx()
-        desired = cur
-        if cur == 2 and not (has_refl_layers and has_qapixel_layers):
-            desired = 0 if has_refl_layers else (1 if has_qapixel_layers else -1)
-        elif cur == 0 and not has_refl_layers:
-            desired = 1 if has_qapixel_layers else -1
-        elif cur == 1 and not has_qapixel_layers:
-            desired = 0 if has_refl_layers else -1
+        # Convenience defaults: if the project has only one obvious Landsat source and nothing is selected,
+        # pre-check it so "Run" is one click.
+        if (has_refl_layers or has_qapixel_layers or has_sentinel_layers or has_opera_layers) and not (
+            self.chk_landsat_refl.isChecked() or self.chk_landsat_pixel.isChecked() or self.chk_use_sentinel.isChecked() or self.chk_use_opera.isChecked()
+        ):
+            if has_qapixel_layers:
+                self.chk_landsat_pixel.setChecked(True)
+            elif has_refl_layers:
+                self.chk_landsat_refl.setChecked(True)
+            elif has_sentinel_layers:
+                self.chk_use_sentinel.setChecked(True)
+            elif has_opera_layers:
+                self.chk_use_opera.setChecked(True)
 
-        if desired in (0, 1, 2) and desired != cur:
-            self.mode_group.blockSignals(True)
-            try:
-                if desired == 0:
-                    self.rb_refl.setChecked(True)
-                elif desired == 1:
-                    self.rb_pixel.setChecked(True)
-                elif desired == 2:
-                    self.rb_both.setChecked(True)
-            finally:
-                self.mode_group.blockSignals(False)
+        # "On" means: toggled AND matching layers exist.
+        refl_on = self.chk_landsat_refl.isChecked() and has_refl_layers
+        pix_on = self.chk_landsat_pixel.isChecked() and has_qapixel_layers
+        sen_on = self.chk_use_sentinel.isChecked() and has_sentinel_layers
+        op_on = self.chk_use_opera.isChecked() and has_opera_layers
 
-        # Disable Run if nothing is selected/available.
-        can_run = has_any and (has_refl_layers or has_qapixel_layers)
+        # SUM is available when at least TWO sources are enabled.
+        enabled_sources = int(refl_on) + int(pix_on) + int(sen_on) + int(op_on)
+        self.chk_sum_selected.setEnabled(enabled_sources >= 2)
+        if enabled_sources < 2:
+            self.chk_sum_selected.setChecked(False)
+
+        # Sentinel UI enablement
+        self.cmb_sentinel_water_mode.setEnabled(sen_on)
+        self.le_sentinel_custom_vals.setEnabled(sen_on and self.cmb_sentinel_water_mode.currentText() == "Custom")
+
+        # Segmentation enablement
+        seg_months = (self.le_seg_months.text() or "").strip()
+        seg_years = (self.le_seg_years.text() or "").strip()
+        seg_on = bool(seg_months or seg_years)
+        self.le_seg_outdir.setEnabled(seg_on)
+        self.btn_seg_browse.setEnabled(seg_on)
+        if not seg_on:
+            # Clear folder placeholder state if segmentation is off
+            pass
+
+        # Disable Run if nothing meaningful is selected/available.
+        can_run = has_any and (enabled_sources >= 1)
         self.btn_run.setEnabled(can_run)
         if not can_run:
-            self.btn_run.setToolTip("Load/select REFL and/or QA_PIXEL rasters to enable Run.")
+            self.btn_run.setToolTip("Enable at least one source (REFL, QA_PIXEL, FMASK, BWTR) with matching rasters loaded.")
         else:
             self.btn_run.setToolTip("")
 
-        # BOTH: only enable SUM checkbox when BOTH selected
-        self.chk_do_sum.setEnabled(self._mode_idx() == 2)
-
         # REFL-only advanced controls
-        has_refl = self._mode_idx() in (0, 2)
-        self.le_bg_rgb.setEnabled(has_refl)
+        has_refl = refl_on
+        self.le_bg_rgb.setEnabled(has_refl and (not self.chk_default_thresh.isChecked()))
         self.chk_default_thresh.setEnabled(has_refl)
         self.le_rgb_thresh.setEnabled(has_refl and (not self.chk_default_thresh.isChecked()))
 
-        # PIXEL-only advanced controls
-        has_pixel = self._mode_idx() in (1, 2)
-        self.chk_default_pixelvals.setEnabled(has_pixel)
-        self.le_pixelvals_457.setEnabled(has_pixel and (not self.chk_default_pixelvals.isChecked()))
-        self.le_pixelvals_89.setEnabled(has_pixel and (not self.chk_default_pixelvals.isChecked()))
+        # PIXEL-like advanced controls (QA_PIXEL and/or FMASK and/or BWTR)
+        has_pixel = pix_on or sen_on or op_on
+        # 'Use default PIXEL water values' only applies to Landsat QA_PIXEL.
+        self.chk_default_pixelvals.setEnabled(pix_on)
+        self.le_pixelvals_457.setEnabled(pix_on and (not self.chk_default_pixelvals.isChecked()))
+        self.le_pixelvals_89.setEnabled(pix_on and (not self.chk_default_pixelvals.isChecked()))
 
         # Pixel smoothing controls
         self.sp_pixsmooth.setEnabled(self.chk_pixsmooth.isChecked())
@@ -746,23 +921,23 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         txt = (
             "<h3>Quick Start</h3>"
             "<ol>"
-            "<li>Load Landsat rasters into QGIS (drag/drop or Layer → Add Layer…)</li>"
-            "<li>Choose <b>Mode</b>: REFL, PIXEL, or BOTH</li>"
+            "<li>Load rasters into QGIS (drag/drop or Layer → Add Layer…)</li>"
+            "<li>Choose <b>Mask(s)</b>: REFL, PIXEL, FMASK, BWTR, or any combination.</li>"
             "<li>Choose outputs (Water/Land polygons; optional TIFFs)</li>"
             "<li>Click <b>Run</b></li>"
             "</ol>"
-            "<p><b>How water counts work:</b> rasters are counted per unique acquisition date (YYYYMMDD) "
-            "so overlapping same-day scenes only count once.</p>"
+            "<p><b>How water counts work:</b> rasters are counted per unique acquisition date "
+            "so overlapping same-day scenes only count once. Water follows 'Water-Once' logic; Land follows 'Never-Water' / 'Always-Land' logic.</p>"
             "<p><b>Where files are saved:</b> by default outputs are temporary layers added to the map. "
-            "Right-click an output layer to export it to disk.</p>"
-            "<p><b>Background mode:</b> enable <b>Run in background</b> (near the bottom) to keep QGIS responsive while it runs.</p>"
+            "Right-click an output layer to export it to disk. If date-segmenting, layers are written directly to disk.</p>"
+            "<p><b>Background mode:</b> enable <b>Run in background</b> (near the bottom) to keep QGIS responsive while it runs. Highly recommended.</p>"
             "<p><b>Smoothing:</b> in <b>Advanced</b>, you can enable <b>Pixel smoothing</b> (fast) or <b>Smoothify</b> (slow / more intensive). "
-            "Pixel smoothing is recommended for large rasters and replaces the Nearest Neighbor (slow / intensive) polygons.</p>"
-            "<p><b>Advanced:</b> By modifying <b>REFL thresholds</b> & <b>PIXEL water codes</b> it's possible to target objects and phenomena other than water/land. White clouds or red buildings, for instance.</p>"
+            "Smoothing is recommended for large rasters and replaces the default Nearest Neighbor polygons.</p>"
+            "By modifying <b>REFL thresholds</b> , <b>PIXEL water codes</b> & <b>FMASK water codes</b> it is possible to target objects and phenomena other than water/land. E.g. Clouds, developed areas, or algal blooms.</p>"
 
             "<hr>"
             "<h3>Acceptable File Inputs</h3>"
-            "<p>Acceptable file inputs can be sourced from <u>Earth Explorer</u>.</p>"
+            "<p>Inputs sourced from <u>USGS Earth Explorer</u>.</p>"
 
             "<p><b>Landsat Collection 2 Level-2</b><br>"
             "⇒ Landsat 8-9 OLI/TIRS C2 L2<br>"
@@ -775,6 +950,21 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             "⇒ Landsat 7 ETM+ C2 L1<br>"
             "⇒ Landsat 4-5 TM C2 L1<br>"
             "&nbsp;&nbsp;&nbsp;&nbsp;↪ <code>Full Resolution Browse (Reflective Color) GeoTIFF</code>"
+            "</p>"
+
+            "<p>Inputs sourced from <u>NASA Earthdata</u>.</p>"
+
+            "<p><b>Sentinel-2</b><br>"
+            "⇒ HLS Sentinel-2 Multi-spectral<br>"
+            "&nbsp;&nbsp;&nbsp;Instrument Surface Reflectance<br>"
+            "&nbsp;&nbsp;&nbsp;Daily Global 30m v2.0<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;↪ <code>Fmask.tif</code><br>"
+            "<br>"
+            "<b>OPERA</b><br>"
+            "⇒ OPERA Dynamic Surface Water<br>"
+            "&nbsp;&nbsp;&nbsp;Extent from Harmonized Landsat<br>"
+            "&nbsp;&nbsp;&nbsp;Sentinel-2 product (Version 1)<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;↪ <code>BWTR.tif</code>"
             "</p>"
 
             "</ul>"
@@ -810,13 +1000,20 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             f"    'VEC_WRITE': {self._vec_idx()},",
             f"    'WRITE_TIFFS': {bool(self.chk_write_water_tiffs.isChecked())},",
             f"    'WRITE_LAND_TIFFS': {bool(self.chk_write_land_tiffs.isChecked())},",
-            f"    'DO_SUM': {bool(self.chk_do_sum.isChecked())},",
+            f"    'DO_SUM': {bool(self.chk_sum_selected.isChecked())},",
+            f"    'USE_REFL': {bool(self.chk_landsat_refl.isChecked())},",
+            f"    'USE_QA_PIXEL': {bool(self.chk_landsat_pixel.isChecked())},",
+            f"    'USE_FMASK': {bool(self.chk_use_sentinel.isChecked())},",
+            f"    'USE_BWTR': {bool(self.chk_use_opera.isChecked())},",
+            "    'DO_FMASK_BWTR_SUM': False,  # legacy; guided UI uses DO_SUM",
             f"    'BG_RGB': '{(self.le_bg_rgb.text() or '0,0,0')}',",
             f"    'KEEP_DEFAULT': {bool(self.chk_default_thresh.isChecked())},",
             f"    'RGB_THRESHOLDS': '{(self.le_rgb_thresh.text() or '0,60,0,60,11,255')}',",
             f"    'PIXEL_KEEP_DEFAULT_WATER': {bool(self.chk_default_pixelvals.isChecked())},",
             f"    'PIXEL_WATER_VALUES_457': '{(self.le_pixelvals_457.text() or '5504')}',",
             f"    'PIXEL_WATER_VALUES_89': '{(self.le_pixelvals_89.text() or '21952')}',",
+            f"    'SENTINEL_WATER_MODE': {int(self.cmb_sentinel_water_mode.currentIndex())},",
+            f"    'SENTINEL_WATER_VALUES_CUSTOM': '{(self.le_sentinel_custom_vals.text() or '32,96,160,224')}',",
             f"    'PIXEL_SMOOTH': {bool(self.chk_pixsmooth.isChecked())},",
             f"    'PIXEL_SMOOTH_SIZE': {int(self.sp_pixsmooth.value())},",
             f"    'SMOOTHIFY': {bool(self.chk_smoothify.isChecked())},",
@@ -831,6 +1028,14 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             "    'OUT_PIXEL_LAND_TIF': 'TEMPORARY_OUTPUT',",
             "    'OUT_PIXEL_VEC': 'TEMPORARY_OUTPUT',",
             "    'OUT_PIXEL_LAND_VEC': 'TEMPORARY_OUTPUT',",
+            "    'OUT_FMASK_TIF': 'TEMPORARY_OUTPUT',",
+            "    'OUT_FMASK_LAND_TIF': 'TEMPORARY_OUTPUT',",
+            "    'OUT_FMASK_VEC': 'TEMPORARY_OUTPUT',",
+            "    'OUT_FMASK_LAND_VEC': 'TEMPORARY_OUTPUT',",
+            "    'OUT_BWTR_TIF': 'TEMPORARY_OUTPUT',",
+            "    'OUT_BWTR_LAND_TIF': 'TEMPORARY_OUTPUT',",
+            "    'OUT_BWTR_VEC': 'TEMPORARY_OUTPUT',",
+            "    'OUT_BWTR_LAND_VEC': 'TEMPORARY_OUTPUT',",
             "    'OUT_SUM_TIF': 'TEMPORARY_OUTPUT',",
             "    'OUT_SUM_LAND_TIF': 'TEMPORARY_OUTPUT',",
             "    'OUT_SUM_VEC': 'TEMPORARY_OUTPUT',",
@@ -922,18 +1127,26 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         # Single outputs
         _append_entry(results.get('OUT_REFL_TIF'), 'water', 'REFL')
         _append_entry(results.get('OUT_PIXEL_TIF'), 'water', 'QA_PIXEL')
+        _append_entry(results.get('OUT_FMASK_TIF'), 'water', 'FMASK')
+        _append_entry(results.get('OUT_BWTR_TIF'), 'water', 'BWTR')
         _append_entry(results.get('OUT_SUM_TIF'), 'water', 'SUM')
         _append_entry(results.get('OUT_REFL_LAND_TIF'), 'land', 'REFL')
         _append_entry(results.get('OUT_PIXEL_LAND_TIF'), 'land', 'QA_PIXEL')
+        _append_entry(results.get('OUT_FMASK_LAND_TIF'), 'land', 'FMASK')
+        _append_entry(results.get('OUT_BWTR_LAND_TIF'), 'land', 'BWTR')
         _append_entry(results.get('OUT_SUM_LAND_TIF'), 'land', 'SUM')
 
         # List outputs
         list_map = [
             ('OUT_REFL_TIF_LIST', 'water', 'REFL'),
             ('OUT_PIXEL_TIF_LIST', 'water', 'QA_PIXEL'),
+            ('OUT_FMASK_TIF_LIST', 'water', 'FMASK'),
+            ('OUT_BWTR_TIF_LIST', 'water', 'BWTR'),
             ('OUT_SUM_TIF_LIST', 'water', 'SUM'),
             ('OUT_REFL_LAND_TIF_LIST', 'land', 'REFL'),
             ('OUT_PIXEL_LAND_TIF_LIST', 'land', 'QA_PIXEL'),
+            ('OUT_FMASK_LAND_TIF_LIST', 'land', 'FMASK'),
+            ('OUT_BWTR_LAND_TIF_LIST', 'land', 'BWTR'),
             ('OUT_SUM_LAND_TIF_LIST', 'land', 'SUM'),
         ]
         for key, kind, cat in list_map:
@@ -990,6 +1203,10 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             "OUT_REFL_LAND_VEC",
             "OUT_PIXEL_VEC",
             "OUT_PIXEL_LAND_VEC",
+            "OUT_FMASK_VEC",
+            "OUT_FMASK_LAND_VEC",
+            "OUT_BWTR_VEC",
+            "OUT_BWTR_LAND_VEC",
             "OUT_SUM_VEC",
             "OUT_SUM_LAND_VEC",
         ):
@@ -1088,10 +1305,25 @@ class LandsatWaterMaskGuidedDialog(QDialog):
                         except Exception:
                             pass
 
-                    if isinstance(results, dict):
+                    # In segmented runs, NEVER add outputs to the QGIS project.
+                    seg_months = (self.le_seg_months.text() or "").strip()
+                    seg_years = (self.le_seg_years.text() or "").strip()
+                    seg_on = bool(seg_months or seg_years)
+
+                    if isinstance(results, dict) and not seg_on:
                         self._load_results_to_map(results)
+
                     try:
-                        self.iface.messageBar().pushSuccess("Landsat Water Mask", "Completed. Outputs added to the map.")
+                        if seg_on:
+                            self.iface.messageBar().pushSuccess(
+                                "Landsat Water Mask",
+                                "Completed. Segmented outputs were written to disk (not added to the map).",
+                            )
+                        else:
+                            self.iface.messageBar().pushSuccess(
+                                "Landsat Water Mask",
+                                "Completed. Outputs added to the map.",
+                            )
                     except Exception:
                         pass
                 else:
@@ -1126,31 +1358,50 @@ class LandsatWaterMaskGuidedDialog(QDialog):
         mode = self._mode_idx()
 
         if not input_layers:
+            # Treat an empty selection as "use all rasters in the project" (matches the Processing algorithm behavior).
+            input_layers = [
+                lyr for lyr in QgsProject.instance().mapLayers().values()
+                if isinstance(lyr, QgsRasterLayer)
+            ]
+
+        if not input_layers:
             QMessageBox.information(
                 self,
-                "No input rasters selected",
-                "Load/select REFL and/or QA_PIXEL raster layers, then try again.",
+                "No input rasters found",
+                "Load or select raster layers (REFL, QA_PIXEL, FMASK, and/or BWTR), then try again.",
             )
             return
 
         n_refl = sum(1 for l in input_layers if _is_refl_layer(l))
         n_qp = sum(1 for l in input_layers if _is_qapixel_layer(l))
+        n_sen = sum(1 for l in input_layers if _is_sentinel_fmask_layer(l))
+        n_op = sum(1 for l in input_layers if _is_opera_dswx_layer(l))
 
         # If the user managed to end up with an invalid mode selection, silently
-        # fall back to a mode that matches what is available (no warnings).
-        if mode == 2 and (n_refl == 0 or n_qp == 0):
-            mode = 0 if n_refl > 0 else (1 if n_qp > 0 else mode)
-        elif mode == 0 and n_refl == 0 and n_qp > 0:
+        # fall back to a mode that matches what is actually available.
+        sen_enabled = bool(self.chk_use_sentinel.isChecked())
+        op_enabled = bool(self.chk_use_opera.isChecked())
+        has_pixel_any = (n_qp > 0) or (sen_enabled and n_sen > 0) or (op_enabled and n_op > 0)
+
+        if mode == 2:
+            # BOTH requires REFL + (QA_PIXEL and/or Sentinel). If REFL is missing but we have pixel sources,
+            # fall back to PIXEL so Sentinel-only (or QA_PIXEL-only) runs smoothly even if Landsat boxes were checked.
+            if n_refl == 0 and has_pixel_any:
+                mode = 1
+            # If pixel sources are missing but REFL exists, fall back to REFL.
+            elif not has_pixel_any and n_refl > 0:
+                mode = 0
+        elif mode == 0 and n_refl == 0 and has_pixel_any:
             mode = 1
-        elif mode == 1 and n_qp == 0 and n_refl > 0:
+        elif mode == 1 and not has_pixel_any and n_refl > 0:
             mode = 0
 
-        if (mode == 0 and n_refl == 0) or (mode == 1 and n_qp == 0) or (mode == 2 and (n_refl == 0 or n_qp == 0)):
+        if (mode == 0 and n_refl == 0) or (mode == 1 and not has_pixel_any) or (mode == 2 and (n_refl == 0 or not has_pixel_any)):
             QMessageBox.information(
                 self,
                 "No compatible inputs",
                 "The selected rasters don't include the required inputs for the chosen mode.\n\n"
-                "REFL mode needs '_refl' layers; PIXEL mode needs 'QA_PIXEL' layers.",
+                "REFL mode needs '_refl' layers; PIXEL mode needs Landsat 'QA_PIXEL' and/or Sentinel HLS S30 Fmask layers and/or OPERA DSWx-HLS BWTR layers.",
             )
             return
 
@@ -1167,16 +1418,49 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             if src:
                 input_sources.append(src)
 
+        # Segmentation inputs (optional)
+        seg_months = (self.le_seg_months.text() or "").strip()
+        seg_years = (self.le_seg_years.text() or "").strip()
+        seg_outdir = (self.le_seg_outdir.text() or "").strip()
+
+        if (seg_months or seg_years) and not seg_outdir:
+            QMessageBox.information(
+                self,
+                "Segmentation needs an output folder",
+                "You provided month/year segmentation ranges, which will generate multiple outputs.\n\n"
+                "Please choose an output folder in '5) Segmentation (optional)' so each segment can write distinct files.",
+            )
+            return
+
         params = {
             # Inputs
             "INPUT_LAYERS": input_sources,
 
             # Core options
             "MODE": mode,
+
+            # Optional segmentation
+            "SEG_MONTHS": seg_months,
+            "SEG_YEARS": seg_years,
+            "SEG_OUTPUT_DIR": seg_outdir,
             "VEC_WRITE": self._vec_idx(),
             "WRITE_TIFFS": bool(self.chk_write_water_tiffs.isChecked()),
             "WRITE_LAND_TIFFS": bool(self.chk_write_land_tiffs.isChecked()),
-            "DO_SUM": bool(self.chk_do_sum.isChecked()),
+            "DO_SUM": bool(self.chk_sum_selected.isChecked()),
+            # Explicit source selections (run ONLY what is checked in Mask sources)
+            "USE_REFL": bool(self.chk_landsat_refl.isChecked()),
+            "USE_QA_PIXEL": bool(self.chk_landsat_pixel.isChecked()),
+            "USE_FMASK": bool(self.chk_use_sentinel.isChecked()),
+            "USE_BWTR": bool(self.chk_use_opera.isChecked()),
+
+            # Legacy (kept for backwards compatibility in the algorithm; guided UI no longer exposes it)
+            "DO_FMASK_BWTR_SUM": False,
+
+            # Sentinel / OPERA controls
+            "USE_SENTINEL": bool(self.chk_use_sentinel.isChecked()),
+            "SENTINEL_SUM_WITH_LANDSAT": bool(self.chk_sum_selected.isChecked()),
+            "USE_OPERA": bool(self.chk_use_opera.isChecked()),
+            "OPERA_SUM_WITH_LANDSAT": bool(self.chk_sum_selected.isChecked()),
 
             # REFL-only
             "BG_RGB": (self.le_bg_rgb.text() or "0,0,0"),
@@ -1187,6 +1471,10 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             "PIXEL_KEEP_DEFAULT_WATER": bool(self.chk_default_pixelvals.isChecked()),
             "PIXEL_WATER_VALUES_457": (self.le_pixelvals_457.text() or "5504"),
             "PIXEL_WATER_VALUES_89": (self.le_pixelvals_89.text() or "21952"),
+
+            # Sentinel-2 HLS S30 Fmask water category
+            "SENTINEL_WATER_MODE": int(self.cmb_sentinel_water_mode.currentIndex()),
+            "SENTINEL_WATER_VALUES_CUSTOM": (self.le_sentinel_custom_vals.text() or "32,96,160,224"),
 
             # Pixel smoothing (fast; majority filter)
             "PIXEL_SMOOTH": bool(self.chk_pixsmooth.isChecked()),
@@ -1207,6 +1495,14 @@ class LandsatWaterMaskGuidedDialog(QDialog):
             "OUT_PIXEL_LAND_TIF": "TEMPORARY_OUTPUT",
             "OUT_PIXEL_VEC": "TEMPORARY_OUTPUT",
             "OUT_PIXEL_LAND_VEC": "TEMPORARY_OUTPUT",
+            "OUT_FMASK_TIF": "TEMPORARY_OUTPUT",
+            "OUT_FMASK_LAND_TIF": "TEMPORARY_OUTPUT",
+            "OUT_FMASK_VEC": "TEMPORARY_OUTPUT",
+            "OUT_FMASK_LAND_VEC": "TEMPORARY_OUTPUT",
+            "OUT_BWTR_TIF": "TEMPORARY_OUTPUT",
+            "OUT_BWTR_LAND_TIF": "TEMPORARY_OUTPUT",
+            "OUT_BWTR_VEC": "TEMPORARY_OUTPUT",
+            "OUT_BWTR_LAND_VEC": "TEMPORARY_OUTPUT",
             "OUT_SUM_TIF": "TEMPORARY_OUTPUT",
             "OUT_SUM_LAND_TIF": "TEMPORARY_OUTPUT",
             "OUT_SUM_VEC": "TEMPORARY_OUTPUT",
@@ -1257,11 +1553,25 @@ class LandsatWaterMaskGuidedDialog(QDialog):
                 self.iface.messageBar().pushWarning("Landsat Water Mask", "Canceled.")
                 return
 
+            # In segmented runs, NEVER add outputs to the QGIS project.
+            seg_months = (self.le_seg_months.text() or "").strip()
+            seg_years = (self.le_seg_years.text() or "").strip()
+            seg_on = bool(seg_months or seg_years)
+
             # Best-effort layer loading (some QGIS versions already load temp outputs)
-            if isinstance(results, dict):
+            if isinstance(results, dict) and not seg_on:
                 self._load_results_to_map(results)
 
-            self.iface.messageBar().pushSuccess("Landsat Water Mask", "Completed. Outputs added to the map.")
+            try:
+                if seg_on:
+                    self.iface.messageBar().pushSuccess(
+                        "Landsat Water Mask",
+                        "Completed. Segmented outputs were written to disk (not added to the map).",
+                    )
+                else:
+                    self.iface.messageBar().pushSuccess("Landsat Water Mask", "Completed. Outputs added to the map.")
+            except Exception:
+                pass
             self.accept()
 
         except Exception as e:
