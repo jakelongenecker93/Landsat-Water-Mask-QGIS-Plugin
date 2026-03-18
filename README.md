@@ -60,5 +60,10 @@ Install from Plugin Store:
 QGIS → Plugins → Manage and Install Plugins… → Install Plugin
 	Else Install from Zip:
   	QGIS → Plugins → Manage and Install Plugins… → Install from ZIP
+	
+<img width="3014" height="1704" alt="Screenshot 2026-01-26 210530" src="https://github.com/user-attachments/assets/40721419-1f6a-456e-9ec9-b7c2035ed2aa" />
+<img width="3014" height="1704" alt="Screenshot 2026-01-26 210530" src="https://github.com/user-attachments/assets/3684d071-ae22-499f-83b3-db5a0bf95432" />
+<img width="922" height="1594" alt="Screenshot 2026-01-09 062647" src="https://github.com/user-attachments/assets/ad79163c-2100-494b-9eda-b84c899deedf" />
+<img width="923" height="1594" alt="Screenshot 2026-01-09 062528" src="https://github.com/user-attachments/assets/cf8581a3-75ac-4c64-bd44-8b8d312583a8" />
 
-If this tool is used, please **Cite as**: Longenecker, J. (2026). Landsat Water Mask Plugin v1.43. QGIS 3.44 QT5. 
+If this tool is used, please **Cite as**: Longenecker, J. (2026). Landsat Water Mask Plugin v1.4.3. QGIS 3.44 QT5. 
