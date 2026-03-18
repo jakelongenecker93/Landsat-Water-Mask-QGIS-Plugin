@@ -1,5 +1,6 @@
 Landsat Water Mask (QGIS Plugin)
 =================================
+[![DOI](https://zenodo.org/badge/1119822256.svg)](https://doi.org/10.5281/zenodo.19079015)
 A guided, modern dialog (Raster → Conversion → Landsat Water Mask)
 for a clean, beginner-friendly workflow.
 
