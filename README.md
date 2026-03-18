@@ -61,4 +61,4 @@ QGIS → Plugins → Manage and Install Plugins… → Install Plugin
 	Else Install from Zip:
   	QGIS → Plugins → Manage and Install Plugins… → Install from ZIP
 
-If this tool is used, please Cite as: Longenecker, J. (2026). Landsat Water Mask Plugin v1.43. QGIS 3.44 QT5. 
+If this tool is used, please **Cite as**: Longenecker, J. (2026). Landsat Water Mask Plugin v1.43. QGIS 3.44 QT5. 
